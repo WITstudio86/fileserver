@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FileServer - 加入服务</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="icon" href="/logo.png">
+</head>
+<body class="min-h-screen bg-gray-50">
+
+  <!-- Header -->
+  <header class="bg-white border-b border-gray-100">
+    <div class="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
+      <a href="/" class="flex items-center gap-2.5 no-underline">
+        <img src="/logo.png" alt="logo" class="w-7 h-7 rounded-lg">
+        <span class="font-semibold text-lg text-gray-800">FileServer</span>
+      </a>
+      <span id="header-status" class="text-xs font-medium px-2.5 py-1 rounded-full bg-yellow-100 text-yellow-700">查找中</span>
+    </div>
+  </header>
+
+  <main class="max-w-4xl mx-auto px-4 py-6">
+
+    <!-- State: lookup -->
+    <div id="state-lookup" class="flex items-center justify-center py-20">
+      <div class="text-center">
+        <div class="spinner mx-auto mb-4"></div>
+        <p class="text-gray-500">查找服务中...</p>
+        <p class="text-xs text-gray-400 mt-1">加入码：<span id="lookup-code" class="font-mono"></span></p>
+      </div>
+    </div>
+
+    <!-- State: not-found -->
+    <div id="state-notfound" class="hidden text-center py-20">
+      <div class="text-5xl mb-4">🔍</div>
+      <p id="notfound-msg" class="text-gray-600 mb-6">未找到该服务，请确认加入码是否正确</p>
+      <a href="/" class="btn btn-primary">返回首页</a>
+    </div>
+
+    <!-- State: username -->
+    <div id="state-username" class="hidden max-w-sm mx-auto">
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 text-center">
+        <h2 class="text-xl font-bold text-gray-800 mb-2">加入服务</h2>
+        <p class="text-sm text-gray-500 mb-1">加入码：<span id="uname-code" class="font-mono font-bold text-blue-600"></span></p>
+        <p class="text-xs text-gray-400 mb-5">
+          <span id="uname-capacity"></span>
+        </p>
+        <input id="username-input" class="input text-center mb-4" type="text" placeholder="输入你的昵称" maxlength="20" autofocus>
+        <p id="uname-error" class="text-red-500 text-sm mb-3 hidden"></p>
+        <button id="btn-join-svc" class="btn btn-primary w-full">加入</button>
+      </div>
+    </div>
+
+    <!-- State: connected -->
+    <div id="state-connected" class="hidden">
+      <!-- File controls -->
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-6">
+        <div class="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h2 class="text-lg font-bold text-gray-800">已连接</h2>
+            <p class="text-sm text-gray-500">加入码：<span id="conn-code" class="font-mono font-bold text-blue-600"></span></p>
+          </div>
+          <div class="flex gap-2">
+            <div id="upload-area"></div>
+            <button id="btn-leave" class="btn btn-outline text-sm">离开</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- File list -->
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+        <h3 class="font-semibold text-gray-800 mb-4">📂 共享文件</h3>
+        <div id="join-file-list" class="space-y-1">
+          <p class="text-gray-400 text-sm">等待文件列表...</p>
+        </div>
+      </div>
+
+      <!-- Preview modal -->
+      <div id="preview-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-auto p-4 relative">
+          <button id="preview-close" class="absolute top-3 right-3 text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+          <div id="preview-content" class="flex items-center justify-center min-h-[200px]"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/js/app.js"></script>
+  <script src="/js/join.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+services:
+  fileserver:
+    image: fileserver:latest
+    container_name: fileserver
+    ports:
+      - "3003:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+      - DATABASE_PATH=data/fileserver.db
+      - TOKEN_EXPIRE_HOURS=12
+      - PORT=3000
+    restart: unless-stopped

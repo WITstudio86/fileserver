@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FileServer - 局域网文件共享</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="icon" href="/logo.png">
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
+
+  <!-- Header -->
+  <header class="sticky top-0 bg-white/80 backdrop-blur border-b border-gray-100 z-50">
+    <div class="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between">
+      <a href="/" class="flex items-center gap-2.5 no-underline">
+        <img src="/logo.png" alt="logo" class="w-8 h-8 rounded-lg">
+        <span class="font-semibold text-lg text-gray-800">FileServer</span>
+      </a>
+      <span class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">ZeLab</span>
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <main class="max-w-5xl mx-auto px-4 pt-16 pb-8 text-center">
+    <h1 class="text-3xl md:text-4xl font-bold text-gray-900 mb-3">局域网文件共享</h1>
+    <p class="text-gray-500 text-lg mb-8">一端开启服务、选择文件夹，另一端输入 4 位码即可加入</p>
+
+    <div class="flex flex-wrap items-center justify-center gap-3">
+      <button id="btn-host" class="btn btn-primary text-lg px-8 py-3 rounded-xl shadow-lg shadow-blue-200">
+        开启服务
+      </button>
+      <span class="text-gray-300 text-sm mx-2">或</span>
+      <button id="btn-join" class="btn btn-outline text-lg px-8 py-3 rounded-xl">
+        加入服务
+      </button>
+    </div>
+
+    <!-- Feature cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mt-16 text-left">
+      <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+        <div class="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center text-blue-600 text-xl mb-3">1</div>
+        <h3 class="font-semibold text-gray-800 mb-1">Token 保护</h3>
+        <p class="text-gray-500 text-sm">每次开启服务生成唯一 Token，确保只有授权设备能管理服务</p>
+      </div>
+      <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+        <div class="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center text-green-600 text-xl mb-3">2</div>
+        <h3 class="font-semibold text-gray-800 mb-1">极速传输</h3>
+        <p class="text-gray-500 text-sm">WebSocket 实时传输，文件直接在局域网内点对点同步，不限速</p>
+      </div>
+      <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+        <div class="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center text-purple-600 text-xl mb-3">3</div>
+        <h3 class="font-semibold text-gray-800 mb-1">4 位码加入</h3>
+        <p class="text-gray-500 text-sm">简单易记的 4 位数字码，输入即可加入，无需复杂配置</p>
+      </div>
+    </div>
+
+    <!-- Steps -->
+    <div class="mt-16 text-left">
+      <h2 class="text-2xl font-bold text-gray-900 mb-8 text-center">三步开始</h2>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="flex gap-4 items-start">
+          <div class="w-8 h-8 bg-blue-500 text-white rounded-full flex items-center justify-center font-semibold text-sm shrink-0">1</div>
+          <div>
+            <p class="font-medium text-gray-800">开启服务</p>
+            <p class="text-gray-500 text-sm mt-0.5">点击"开启服务"，选择要共享的文件夹，获取 4 位加入码</p>
+          </div>
+        </div>
+        <div class="flex gap-4 items-start">
+          <div class="w-8 h-8 bg-blue-500 text-white rounded-full flex items-center justify-center font-semibold text-sm shrink-0">2</div>
+          <div>
+            <p class="font-medium text-gray-800">分享加入码</p>
+            <p class="text-gray-500 text-sm mt-0.5">将 4 位加入码发送给同一局域网内需要接收文件的伙伴</p>
+          </div>
+        </div>
+        <div class="flex gap-4 items-start">
+          <div class="w-8 h-8 bg-blue-500 text-white rounded-full flex items-center justify-center font-semibold text-sm shrink-0">3</div>
+          <div>
+            <p class="font-medium text-gray-800">开始传输</p>
+            <p class="text-gray-500 text-sm mt-0.5">对方输入加入码后即可下载和上传文件，实时同步进度</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/js/app.js"></script>
+  <script src="/js/home.js"></script>
+</body>
+</html>

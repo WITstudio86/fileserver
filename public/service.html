@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FileServer - 服务管理</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="icon" href="/logo.png">
+</head>
+<body class="min-h-screen bg-gray-50">
+
+  <!-- Header -->
+  <header class="bg-white border-b border-gray-100">
+    <div class="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
+      <a href="/" class="flex items-center gap-2.5 no-underline">
+        <img src="/logo.png" alt="logo" class="w-7 h-7 rounded-lg">
+        <span class="font-semibold text-lg text-gray-800">FileServer</span>
+      </a>
+      <span id="header-badge" class="text-xs font-medium px-2.5 py-1 rounded-full bg-yellow-100 text-yellow-700">配置中</span>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 py-6">
+
+    <!-- State: validating -->
+    <div id="state-validating" class="flex items-center justify-center py-20">
+      <div class="text-center">
+        <div class="spinner mx-auto mb-4"></div>
+        <p class="text-gray-500">验证服务令牌...</p>
+      </div>
+    </div>
+
+    <!-- State: invalid -->
+    <div id="state-invalid" class="hidden text-center py-20">
+      <div class="text-5xl mb-4">⚠</div>
+      <p id="invalid-msg" class="text-gray-600 mb-6">令牌无效或已过期</p>
+      <a href="/" class="btn btn-primary">返回首页</a>
+    </div>
+
+    <!-- State: configuring -->
+    <div id="state-configuring" class="hidden max-w-lg mx-auto">
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <h2 class="text-xl font-bold text-gray-800 mb-6">⚙ 配置服务</h2>
+
+        <label class="block mb-4">
+          <span class="text-sm font-medium text-gray-700">加入码（4 位数字）</span>
+          <input id="cfg-code" class="input mt-1 text-center text-xl tracking-widest" type="text" maxlength="4" placeholder="例如 1234" value="">
+        </label>
+
+        <label class="block mb-4">
+          <span class="text-sm font-medium text-gray-700">最大人数</span>
+          <input id="cfg-max-users" class="input mt-1" type="number" min="1" max="50" value="10">
+        </label>
+
+        <label class="flex items-center gap-2 mb-4 cursor-pointer">
+          <input id="cfg-allow-upload" type="checkbox" checked class="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+          <span class="text-sm font-medium text-gray-700">允许加入者上传文件</span>
+        </label>
+
+        <label class="block mb-6">
+          <span class="text-sm font-medium text-gray-700">共享目录</span>
+          <button id="cfg-pick-dir" class="btn btn-outline w-full mt-1 justify-start text-gray-500">
+            📁 选择文件夹
+          </button>
+          <p id="cfg-dir-name" class="text-xs text-gray-400 mt-1 hidden"></p>
+        </label>
+
+        <p id="cfg-error" class="text-red-500 text-sm mb-3 hidden"></p>
+        <button id="cfg-save" class="btn btn-primary w-full" disabled>保存并启动</button>
+      </div>
+    </div>
+
+    <!-- State: active -->
+    <div id="state-active" class="hidden">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Main panel -->
+        <div class="lg:col-span-2 space-y-6">
+          <!-- Status card -->
+          <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+            <div class="flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <h2 class="text-lg font-bold text-gray-800">服务运行中</h2>
+                <p class="text-sm text-gray-500 mt-0.5">
+                  加入码：<span id="active-code" class="font-mono font-bold text-blue-600 text-lg tracking-widest"></span>
+                  &nbsp;·&nbsp; 目录：<span id="active-dir" class="text-gray-700"></span>
+                  <button id="btn-pick-dir" class="btn btn-outline text-xs px-2 py-1 ml-2 hidden">选择目录</button>
+                </p>
+              </div>
+              <button id="btn-close" class="btn btn-danger">关闭服务</button>
+            </div>
+          </div>
+
+          <!-- Files -->
+          <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+            <h3 class="font-semibold text-gray-800 mb-4">📂 共享文件</h3>
+            <div id="host-file-list" class="space-y-1">
+              <p class="text-gray-400 text-sm">加载中...</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+          <!-- Users -->
+          <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+            <h3 class="font-semibold text-gray-800 mb-3">👥 在线用户</h3>
+            <div id="user-list" class="space-y-2">
+              <p class="text-gray-400 text-sm">等待加入...</p>
+            </div>
+          </div>
+
+          <!-- Activity log -->
+          <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="font-semibold text-gray-800">📋 活动日志</h3>
+              <select id="log-filter" class="text-xs border border-gray-200 rounded px-2 py-1">
+                <option value="">全部</option>
+              </select>
+            </div>
+            <div id="activity-log" class="space-y-2 max-h-80 overflow-y-auto text-sm">
+              <p class="text-gray-400 text-sm">暂无记录</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/js/app.js"></script>
+  <script src="/js/service.js"></script>
+</body>
+</html>

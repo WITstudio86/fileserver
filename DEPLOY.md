@@ -1,143 +1,133 @@
-# FileServer 部署文档（1Panel）
+# FileServer 部署指南
 
-## 项目概述
+## 项目说明
 
-FileServer 是一个基于浏览器的局域网文件共享服务。一端开启服务、选择文件夹，另一端输入 4 位码即可加入，进行文件下载和上传。
+FileServer 是一个基于浏览器的局域网文件共享服务。一端开启服务、选择文件夹并生成 4 位加入码，另一端输入加入码即可进行文件下载和上传，实时同步进度。
 
-**技术栈：** Next.js 16 + TypeScript + SQLite + WebSocket
+**技术栈：** Express + sql.js（纯 JS SQLite）+ WebSocket (ws) + 原生 HTML/JS
 
----
+此应用通过子域名 `https://fileserver.你的域名.com/` 访问。
 
-## 前置准备
+> **架构说明**：sql.js 是 SQLite 编译为 WebAssembly 的纯 JS 实现，无需任何原生编译。Express + 静态页面，无构建步骤，2 核 2G 服务器完全够用。
 
-在 1Panel 面板中：
+## 1. 准备工作
 
-### 1. 安装 Node.js 运行环境
+### 1.1 服务器要求
 
-`应用商店` → 搜索 `Node.js` → 安装（推荐 18.x 或 20.x）
+已安装 1Panel + Docker + OpenResty（详见根目录 `DEPLOY.md`）。
 
-### 2. 检查编译工具
+### 1.2 DNS 配置
 
-`better-sqlite3` 是原生模块，需要编译。1Panel 的 Node.js 容器通常已内置 `build-essential`。如果安装依赖时报错，通过终端执行：
+在域名 DNS 管理后台添加一条 A 记录：
+
+| 主机记录 | 记录类型 | 记录值 |
+|---------|---------|--------|
+| `fileserver` | A | `<服务器公网IP>` |
+
+> 如果使用 CDN（如 Cloudflare），SSL 证书申请期间需关闭橙色云朵（仅 DNS 模式）。
+
+### 1.3 端口规划
+
+| 环境 | 端口 | 说明 |
+|------|------|------|
+| 容器内 | 3000 | Express 应用监听端口 |
+| 宿主机映射 | 3003 | 外部访问端口，不与其他应用冲突 |
+
+> 与现有应用端口不冲突，详见根目录 `DEPLOY.md`。
+
+## 2. 部署方式
+
+两种方式任选。**方式一更简单**（服务器直接 npm start），方式二更适合生产环境（Docker 隔离）。
+
+### 方式一：1Panel Node.js 运行环境（推荐，最简）
+
+sql.js 是纯 JavaScript，`npm install` 秒装，无需编译。
+
+#### Step 1：上传代码
 
 ```bash
-apt-get update && apt-get install -y build-essential python3
+mkdir -p /opt/fileserver
+# 在本地执行：
+scp -r server.js package.json package-lock.json src/ public/ root@<IP>:/opt/fileserver/
 ```
 
----
+> **不要上传** `node_modules`、`data/`、`.env.local`、`.git`。
 
-## 部署步骤
+#### Step 2：创建运行环境
 
-### 1. 上传项目
-
-两种方式任选：
-
-**方式 A：上传压缩包**
-
-将项目文件夹打包为 `.tar.gz`：
-```bash
-# 在本地项目目录执行
-tar --exclude='node_modules' --exclude='.next' --exclude='data' -czf fileserver.tar.gz .
-```
-
-然后进入 1Panel → `网站` → 点击项目目录 → `上传` 并解压。
-
-**方式 B：Git 克隆**
-
-```bash
-cd /opt/1panel/apps/nodejs/  # 或你的实际路径
-git clone <你的仓库地址> fileserver
-```
-
----
-
-### 2. 创建 Node.js 网站
-
-`网站` → `创建网站` → 选择 `运行环境`：
+1Panel → **「网站」** → **「运行环境」** → **「创建运行环境」**：
 
 | 配置项 | 值 |
 |--------|-----|
-| 类型 | Node.js |
-| Node.js 版本 | 18 或 20 |
-| 项目目录 | 选择上传/克隆的 fileserver 目录 |
-| 启动命令 | `npx tsx server.ts` |
-| 端口 | `3000` |
+| 名称 | `fileserver` |
+| 应用 | `Node.js` |
+| 版本 | `22` |
+| 源码目录 | `/opt/fileserver` |
+| 启动命令 | `node server.js` |
+| 安装命令 | `npm install` |
+| 应用端口 | `3000` |
+| 外部映射端口 | `3003` |
+| 包管理器 | `npm` |
 
-#### 环境变量
+#### Step 3：配置环境变量
 
-在网站设置中添加：
+在运行环境详情 → **「编辑」** → **「环境变量」**：
 
-| 变量名 | 值 | 说明 |
-|--------|-----|------|
-| `NODE_ENV` | `production` | 生产模式 |
-| `DATABASE_PATH` | `data/fileserver.db` | 数据库路径 |
-| `TOKEN_EXPIRE_HOURS` | `12` | Token 有效期 |
-| `PORT` | `3000` | 监听端口 |
+| 变量名 | 值 |
+|--------|-----|
+| `NODE_ENV` | `production` |
+| `DATABASE_PATH` | `data/fileserver.db` |
+| `TOKEN_EXPIRE_HOURS` | `12` |
+| `PORT` | `3000` |
 
----
-
-### 3. 安装依赖
-
-进入项目目录，在终端中执行：
+#### Step 4：启动并验证
 
 ```bash
-npm install
+curl http://127.0.0.1:3003/
 ```
 
-等待 `better-sqlite3` 编译完成。看到 `Successfully installed` 即可。
+### 方式二：Docker Compose
 
-如果编译失败，参考文档末尾"[常见问题](#常见问题)"第 1 条。
-
----
-
-### 4. 创建数据目录
+#### Step 1：本地构建并上传
 
 ```bash
+docker build --platform linux/amd64 -t fileserver:latest .
+docker save fileserver:latest | gzip > fileserver.tar.gz
+scp fileserver.tar.gz docker-compose.yml root@<IP>:/opt/fileserver/
+```
+
+> 镜像仅 ~80MB，无原生编译，构建极快。
+
+#### Step 2：服务器加载运行
+
+```bash
+cd /opt/fileserver
+docker load < fileserver.tar.gz
 mkdir -p data
-chmod 755 data
+docker compose up -d
 ```
 
-数据库文件 `fileserver.db` 会在首次运行时自动创建，无需手动操作。
+或通过 1Panel → **「容器」** → **「编排」** → 创建编排。
 
----
+## 3. OpenResty 反向代理配置
 
-### 5. 启动服务
+### 3.1 创建反向代理网站
 
-在 1Panel 网站管理中点击 `启动`，或通过终端：
+1Panel → **「网站」** → **「创建网站」** → **「反向代理」**：
 
-```bash
-npx tsx server.ts
-```
+| 配置项 | 值 |
+|--------|-----|
+| 主域名 | `fileserver.你的域名.com` |
+| 代理地址 | `127.0.0.1:3003` |
 
-点击 `网站` → `日志` 确认输出：
+### 3.2 添加 WebSocket 代理
 
-```
-> Ready on http://0.0.0.0:3000
-```
-
----
-
-## 反向代理配置
-
-1Panel 内置 OpenResty（Nginx）。创建网站时已自动生成基础反向代理，需要手动添加 WebSocket 支持。
-
-### 1. 进入反向代理配置
-
-`网站` → 点击你的网站 → `反向代理` → 编辑已有配置，或 `创建反向代理`：
-
-```
-代理名称：fileserver
-代理地址：http://127.0.0.1:3000
-```
-
-### 2. 配置源文
-
-在反向代理的 `源文`（Raw Config）中，替换为以下内容：
+1. 1Panel → **「网站」** → 点击 `fileserver.你的域名.com` → **「配置」** → **「配置文件」**
+2. 在 `server {}` 块中找到 `location /` 块，在它**之前**添加：
 
 ```nginx
-# WebSocket 代理（必须放在 / 之前）
 location /ws {
-    proxy_pass http://127.0.0.1:3000;
+    proxy_pass http://127.0.0.1:3003;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -148,152 +138,140 @@ location /ws {
     proxy_read_timeout 86400s;
     proxy_buffering off;
 }
+```
 
+3. 确认 `location /` 块：
+```nginx
 location / {
-    proxy_pass http://127.0.0.1:3000;
-    proxy_http_version 1.1;
+    proxy_pass http://127.0.0.1:3003/;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
     proxy_read_timeout 300s;
 }
 ```
 
-> **关键：** `/ws` 必须在 `/` 之前，确保 WebSocket 请求优先匹配。
+4. 点击 **「保存」**
 
-### 3. 验证
+> **关键**：`/ws` 必须在 `/` 之前，确保 WebSocket 升级请求优先匹配。
 
-保存后检查配置是否生效：
+### 3.3 验证
 
 ```bash
-# HTTP
-curl -s -o /dev/null -w "%{http_code}" http://你的域名
-
-# WebSocket（安装 wscat）
-npx wscat -c ws://你的域名/ws
-# 看到 Connected 即正常
+curl -s -o /dev/null -w "%{http_code}" http://fileserver.你的域名.com/
+# 应返回 200
 ```
 
----
+## 4. SSL 证书（HTTPS）
 
-## SSL / HTTPS
+> FileServer 依赖 File System Access API 选择共享文件夹，该 API 要求 secure context。
 
-`网站` → `HTTPS` → `启用 HTTPS` → 选择 `自动申请 Let's Encrypt 证书`。
+1. 1Panel → **「网站」** → 点击 `fileserver.你的域名.com` → **「配置」** → **「HTTPS」** → **「申请证书」**
+2. 证书类型：Let's Encrypt，验证方式：HTTP 验证，开启自动续签
+3. 证书申请成功后，启用 HTTPS，选择「禁止 HTTP」强制跳转
 
-1Panel 会自动完成证书申请、安装和续签。
+> 如果服务器已有泛域名证书（`*.你的域名.com`），可直接使用。
 
----
+## 5. 数据库备份
 
-## 备份
+SQLite 数据文件：`/opt/fileserver/data/fileserver.db`
 
-SQLite 数据库是唯一的持久化数据，路径为项目目录下的 `data/fileserver.db`。
+### 定时备份
 
-**1Panel 面板备份：**
-
-`计划任务` → `创建计划任务`：
+1Panel → **「计划任务」** → **「创建计划任务」**：
 
 | 配置项 | 值 |
 |--------|-----|
-| 任务类型 | 备份 |
-| 备份范围 | 选择 fileserver 项目目录 |
-| 保留份数 | 7 |
-| 执行周期 | 每天 03:00 |
-
-**手动备份：**
+| 任务名称 | 备份 FileServer 数据库 |
+| 执行周期 | 每天 3:00 |
 
 ```bash
-# 进入项目目录
-sqlite3 data/fileserver.db ".backup data/fileserver-$(date +%Y%m%d).db"
+#!/bin/bash
+BACKUP_DIR="/opt/backups/fileserver"
+mkdir -p "$BACKUP_DIR"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+cp /opt/fileserver/data/fileserver.db "$BACKUP_DIR/fileserver-$TIMESTAMP.db"
+find "$BACKUP_DIR" -name "fileserver-*.db" -mtime +7 -delete
+echo "备份完成: fileserver-$TIMESTAMP.db"
 ```
 
----
-
-## 升级
+### 恢复
 
 ```bash
-# 1. 停止服务
-# 在 1Panel 网页管理中点击「停止」
-
-# 2. 拉取最新代码
-cd /你的项目目录
-git pull
-
-# 3. 更新依赖
-npm install
-
-# 4. 重新启动
-# 在 1Panel 网页管理中点击「启动」
+cp /path/to/backup/fileserver-YYYYMMDD.db /opt/fileserver/data/fileserver.db
+# 然后重启运行环境
 ```
 
----
-
-## 常见问题
-
-### 1. better-sqlite3 编译失败
-
-**症状：** `npm install` 报 `node-gyp` 相关错误
-
-**解决：**
+## 6. 更新部署
 
 ```bash
-# 确保编译工具已安装
-apt-get update && apt-get install -y build-essential python3
+# 1. 上传更新的文件
+scp -r server.js src/ public/ root@<IP>:/opt/fileserver/
 
-# 清理后重装
-rm -rf node_modules
-npm install
+# 2. 1Panel → 网站 → 运行环境 → fileserver → 重启
+#    (或 docker compose down && docker compose up -d)
 ```
 
-如果是 ARM 架构（树莓派等），额外装：
+## 7. 验证清单
+
+- [ ] DNS 生效：`nslookup fileserver.你的域名.com`
+- [ ] `https://fileserver.你的域名.com/` 正常显示首页
+- [ ] 点击「开启服务」→ 选择文件夹 → 生成 4 位加入码
+- [ ] 另一浏览器输入加入码 → 加入成功 → 文件列表可见
+- [ ] 文件下载正常
+- [ ] 文件上传正常（如允许）
+- [ ] DevTools → Network → WS → `/ws` 状态 101
+- [ ] HTTPS 证书生效，安全锁显示
+
+## 8. 故障排查
+
+### 容器 / 运行环境启动失败
 
 ```bash
-apt-get install -y g++ make
+# 查看日志：1Panel → 网站 → 运行环境 → fileserver → 日志
+# 或 docker compose logs fileserver
 ```
 
-### 2. WebSocket 连接不上（wss://）
+### WebSocket 连接失败（wss://）
 
-**症状：** 加入服务后看不到文件，浏览器控制台 WebSocket 报错
+1. 确认 Nginx 中 `/ws` location 在 `/` 之前
+2. 确认 `/ws` 块包含 `Upgrade` 和 `Connection "upgrade"` header
 
-**排查：**
+### HTTPS 下文件夹选择不可用
 
-1. 确认反向代理 `/ws` location 在 `/` **之前**
-2. 确认 `/ws` 块包含 `proxy_set_header Upgrade` 和 `Connection "upgrade"`
-3. 如果启用了 HTTPS，确认客户端使用 `wss://` 协议（代码自动处理，无需手动改）
+确认已启用 HTTPS（File System Access API 要求 secure context）。
 
-### 3. 页面刷新后状态丢失
+### 502 Bad Gateway
 
-**症状：** 开启服务后刷新页面，服务不再运行
+- 检查运行环境 / 容器是否运行
+- 检查 `proxy_pass` 地址和端口（127.0.0.1:3003）
 
-**原因：** 刷新页面会关闭 WebSocket 连接，当前版本刷新后需要重新配置服务。后续版本计划支持断线重连。
+## 附录：项目结构
 
-**变通方案：** 刷新后，使用同一 Token 重新进入 `/service?token=xxx`。
-
-### 4. HTTPS 下 `showDirectoryPicker` 不可用
-
-**症状：** 无法选择共享目录
-
-**原因：** File System Access API 要求 secure context。1Panel 启用 HTTPS 后即可正常使用。
-
-### 5. 端口冲突
-
-**症状：** 启动报 `EADDRINUSE`
-
-**解决：** 检查是否有其他服务占用 3000 端口，或在环境变量中修改 `PORT` 为其他值并同步更新反向代理的 `proxy_pass`。
-
-### 6. 内存不足
-
-**症状：** 传输大文件时服务崩溃
-
-**说明：** 当前版本文件通过 WebSocket 传输，大文件会完整加载到内存。建议传输文件不超过 500MB。未来版本将支持分块传输。
-
-### 7. 数据库锁定
-
-**症状：** `SQLITE_BUSY` 错误
-
-**说明：** 项目已启用 WAL 模式，正常情况下不会出现。如在高并发场景下出现，可通过环境变量延长超时：
-
-```bash
-# 一般不需要设置
-SQLITE_BUSY_TIMEOUT=5000
+```
+/opt/fileserver/
+├── server.js              # Express + WebSocket 入口
+├── package.json
+├── src/
+│   ├── db.js              # sql.js 数据库层（纯 JS，无需编译）
+│   ├── ws-handler.js      # WebSocket 消息处理
+│   └── routes/
+│       ├── token.js       # Token API
+│       ├── service.js     # 服务 API
+│       └── logs.js        # 活动日志 API
+├── public/
+│   ├── index.html         # 首页
+│   ├── service.html       # 服务端页面
+│   ├── join.html          # 加入端页面
+│   ├── css/style.css
+│   ├── js/
+│   │   ├── app.js         # 共享工具
+│   │   ├── home.js        # 首页逻辑
+│   │   ├── service.js     # 服务端逻辑
+│   │   └── join.js        # 加入端逻辑
+│   └── logo.png
+└── data/
+    └── fileserver.db      # SQLite 数据库（自动创建）
 ```
