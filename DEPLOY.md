@@ -30,20 +30,16 @@ FileServer 是一个基于浏览器的局域网文件共享服务。一端开启
 
 | 环境 | 端口 | 说明 |
 |------|------|------|
-| 容器内 | 3000 | Express 应用监听端口 |
+| 1Panel 内部 | 3000 | Express 应用监听端口 |
 | 宿主机映射 | 3003 | 外部访问端口，不与其他应用冲突 |
 
 > 与现有应用端口不冲突，详见根目录 `DEPLOY.md`。
 
-## 2. 部署方式
-
-两种方式任选。**方式一更简单**（服务器直接 npm start），方式二适合 Docker 隔离。
-
-### 方式一：1Panel Node.js 运行环境（推荐，最简）
+## 2. 部署
 
 sql.js 是纯 JavaScript，`npm install` 秒装，无需编译。
 
-#### Step 1：上传代码
+### Step 1：上传代码
 
 ```bash
 mkdir -p /opt/fileserver
@@ -53,7 +49,7 @@ scp -r server.js package.json package-lock.json src/ public/ root@<IP>:/opt/file
 
 > **不要上传** `node_modules`、`data/`、`.env.local`、`.git`。
 
-#### Step 2：创建运行环境
+### Step 2：创建运行环境
 
 1Panel → **「网站」** → **「运行环境」** → **「创建运行环境」**：
 
@@ -69,7 +65,7 @@ scp -r server.js package.json package-lock.json src/ public/ root@<IP>:/opt/file
 | 外部映射端口 | `3003` |
 | 包管理器 | `npm` |
 
-#### Step 3：配置环境变量
+### Step 3：配置环境变量
 
 在运行环境详情 → **「编辑」** → **「环境变量」**：
 
@@ -80,52 +76,10 @@ scp -r server.js package.json package-lock.json src/ public/ root@<IP>:/opt/file
 | `TOKEN_EXPIRE_HOURS` | `12` |
 | `PORT` | `3000` |
 
-#### Step 4：启动并验证
+### Step 4：验证
 
 ```bash
 curl http://127.0.0.1:3003/
-```
-
-### 方式二：Docker Compose
-
-#### Step 1：本地构建并上传
-
-```bash
-docker build --platform linux/amd64 -t fileserver:latest .
-docker save fileserver:latest | gzip > fileserver.tar.gz
-scp fileserver.tar.gz docker-compose.yml root@<IP>:/opt/fileserver/
-```
-
-> 镜像仅 ~80MB，无原生编译，构建极快。
-
-#### Step 2：服务器加载运行
-
-```bash
-cd /opt/fileserver
-docker load < fileserver.tar.gz
-mkdir -p data
-docker compose up -d
-```
-
-或通过 1Panel → **「容器」** → **「编排」** → 创建编排。
-
-#### docker-compose.yml
-
-```yaml
-services:
-  fileserver:
-    image: fileserver:latest
-    container_name: fileserver
-    ports:
-      - "3003:3000"
-    volumes:
-      - ./data:/app/data
-    environment:
-      - NODE_ENV=production
-      - DATABASE_PATH=data/fileserver.db
-      - TOKEN_EXPIRE_HOURS=12
-      - PORT=3000
-    restart: unless-stopped
 ```
 
 ## 3. OpenResty 反向代理配置
@@ -189,8 +143,6 @@ curl -s -o /dev/null -w "%{http_code}" http://fileserver.你的域名.com/
 
 > FileServer 依赖 File System Access API 选择共享文件夹，该 API 要求 secure context，因此 HTTPS 是必需的。
 
-### 申请证书
-
 1. 1Panel → **「网站」** → 点击 `fileserver.你的域名.com` → **「配置」** → **「HTTPS」** → **「申请证书」**
 2. 证书类型：Let's Encrypt，验证方式：HTTP 验证，开启自动续签
 3. 证书申请成功后，启用 HTTPS，选择 **「禁止 HTTP」** 强制跳转
@@ -217,12 +169,7 @@ SQLite 数据文件：`/opt/fileserver/data/fileserver.db`
 BACKUP_DIR="/opt/backups/fileserver"
 mkdir -p "$BACKUP_DIR"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-
-# 方式一（运行环境）：直接复制
 cp /opt/fileserver/data/fileserver.db "$BACKUP_DIR/fileserver-$TIMESTAMP.db"
-
-# 方式二（Docker）：
-# docker cp fileserver:/app/data/fileserver.db "$BACKUP_DIR/fileserver-$TIMESTAMP.db"
 
 # 保留最近 7 天
 find "$BACKUP_DIR" -name "fileserver-*.db" -mtime +7 -delete
@@ -234,7 +181,7 @@ echo "备份完成: fileserver-$TIMESTAMP.db"
 
 ```bash
 cp /path/to/backup/fileserver-YYYYMMDD.db /opt/fileserver/data/fileserver.db
-# 然后重启运行环境
+# 然后在 1Panel 中重启运行环境
 ```
 
 ## 6. 更新部署
@@ -243,13 +190,10 @@ cp /path/to/backup/fileserver-YYYYMMDD.db /opt/fileserver/data/fileserver.db
 # 1. 上传更新的文件
 scp -r server.js src/ public/ root@<IP>:/opt/fileserver/
 
-# 2. 方式一：1Panel → 网站 → 运行环境 → fileserver → 重启
-#    方式二：cd /opt/fileserver && docker compose down && docker compose up -d --build
+# 2. 1Panel → 网站 → 运行环境 → fileserver → 重启
 ```
 
 ## 7. 验证清单
-
-部署完成后验证：
 
 - [ ] DNS 解析生效：`nslookup fileserver.你的域名.com` 返回服务器 IP
 - [ ] `https://fileserver.你的域名.com/` 正常显示首页
@@ -262,12 +206,9 @@ scp -r server.js src/ public/ root@<IP>:/opt/fileserver/
 
 ## 8. 故障排查
 
-### 容器 / 运行环境启动失败
+### 运行环境启动失败
 
-```bash
-# 查看日志：1Panel → 网站 → 运行环境 → fileserver → 日志
-# 或 docker compose logs fileserver
-```
+1Panel → **「网站」** → **「运行环境」** → fileserver → **「日志」** 查看错误信息。
 
 ### WebSocket 连接失败（wss://）
 
@@ -280,7 +221,7 @@ scp -r server.js src/ public/ root@<IP>:/opt/fileserver/
 
 ### 502 Bad Gateway
 
-- 检查运行环境 / 容器是否运行
+- 检查运行环境状态是否为「运行中」
 - 检查 `proxy_pass` 地址和端口（127.0.0.1:3003）
 
 ### 上传文件失败
@@ -313,9 +254,6 @@ scp -r server.js src/ public/ root@<IP>:/opt/fileserver/
 │   │   ├── service.js     # 服务端逻辑
 │   │   └── join.js        # 加入端逻辑
 │   └── logo.png
-├── Dockerfile
-├── docker-compose.yml
-├── .dockerignore
 └── data/
     └── fileserver.db      # SQLite 数据库（自动创建）
 ```
