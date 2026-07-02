@@ -39,6 +39,8 @@ function handleMessage(client, msg, db) {
     case 'signal': handleSignal(client, msg.target, msg.payload); break;
     case 'kick': handleKick(client, msg.userId, db); break;
     case 'close': handleClose(client, db); break;
+    case 'ping': sendTo(client.ws, { type: 'pong' }); break;
+    case 'chat-message': broadcastToService(client.serviceId, msg); break;
     default:
       console.log(`[WS] broadcast pass-through type=${msg.type} to service ${client.serviceId}, members=${client.serviceId ? services.get(client.serviceId)?.size : 0}`);
       broadcastToService(client.serviceId, msg);
