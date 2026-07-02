@@ -7,6 +7,9 @@ let serviceId = null;
 let allowUpload = false;
 let files = [];
 let username = '';
+let heartbeat = null;
+let reconnect = null;
+let intentionalLeave = false;
 
 function showState(name) {
   ['lookup', 'notfound', 'username', 'connected'].forEach(s => {
@@ -78,24 +81,72 @@ function setupUsernameForm() {
 
 // ── WebSocket ──
 
-function connectWebSocket() {
+function connectWebSocket(isRetry) {
+  if (ws) {
+    try { ws.close(); } catch {}
+  }
+
+  updateConnectionStatus('connecting');
   ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
     ws.send(JSON.stringify({ type: 'join', code, username }));
+    // Start heartbeat
+    if (heartbeat) heartbeat.stop();
+    heartbeat = createHeartbeat({
+      pingInterval: 15000,
+      timeout: 45000,
+      onPing: () => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ping' }));
+        }
+      },
+      onTimeout: () => {
+        console.log('[Join] heartbeat timeout');
+        if (ws) { try { ws.close(); } catch {} }
+      },
+    });
+    heartbeat.start();
   };
 
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
+    if (msg.type === 'pong') {
+      heartbeat.reset();
+      return;
+    }
     handleMessage(msg);
   };
 
   ws.onclose = () => {
-    if (document.getElementById('state-connected').classList.contains('hidden')) {
+    if (heartbeat) heartbeat.stop();
+    if (intentionalLeave) return;
+
+    const isConnected = !document.getElementById('state-connected').classList.contains('hidden');
+
+    if (!isConnected) {
+      updateConnectionStatus('disconnected');
       showToast('连接失败，请重试', 'error');
       document.getElementById('btn-join-svc').disabled = false;
       document.getElementById('btn-join-svc').textContent = '加入';
+      return;
     }
+
+    updateConnectionStatus('disconnected');
+
+    if (reconnect) reconnect.cancel();
+    reconnect = createReconnect({
+      delays: [2000, 4000, 8000],
+      onReconnect: () => {
+        updateConnectionStatus('connecting');
+        connectWebSocket(true);
+      },
+      onFailed: () => {
+        updateConnectionStatus('disconnected');
+        showToast('连接失败，请点击恢复按钮重试', 'error');
+      },
+    });
+    reconnect.start();
   };
 
   ws.onerror = () => {};
@@ -110,12 +161,15 @@ function handleMessage(msg) {
     case 'joined':
       serviceId = msg.serviceId;
       showState('connected');
-      document.getElementById('header-status').textContent = '已连接';
-      document.getElementById('header-status').className = 'text-xs font-medium px-2.5 py-1 rounded-full bg-green-100 text-green-700';
+      updateConnectionStatus('connected');
       document.getElementById('conn-code').textContent = code;
       console.log('[JOIN] allowUpload =', allowUpload);
       if (allowUpload) { console.log('[JOIN] calling setupUpload'); setupUpload(); }
       else { console.log('[JOIN] upload not allowed — setupUpload skipped'); document.getElementById('upload-area').innerHTML = '<span class="text-xs text-gray-400">上传未启用</span>'; }
+      break;
+
+    case 'chat-message':
+      addChatMessage(msg);
       break;
 
     case 'file-list':
@@ -143,11 +197,13 @@ function handleMessage(msg) {
       break;
 
     case 'host-left':
+      intentionalLeave = true;
       showToast('服务已关闭', 'error');
       setTimeout(() => { location.href = '/'; }, 2000);
       break;
 
     case 'kicked':
+      intentionalLeave = true;
       showToast('你已被移出服务', 'error');
       setTimeout(() => { location.href = '/'; }, 2000);
       break;
@@ -317,9 +373,100 @@ function setupUpload() {
   });
 }
 
+// ── Connection status ──
+
+function updateConnectionStatus(state) {
+  const statusEl = document.getElementById('connection-status');
+  const headerStatusEl = document.getElementById('header-status');
+  const restoreBtn = document.getElementById('btn-restore');
+
+  if (state === 'connected') {
+    headerStatusEl.classList.add('hidden');
+    statusEl.classList.remove('hidden');
+    statusEl.textContent = '🟢 已连接';
+    statusEl.className = 'text-xs font-medium px-2.5 py-1 rounded-full bg-green-100 text-green-700';
+    restoreBtn.classList.add('hidden');
+  } else if (state === 'connecting') {
+    headerStatusEl.classList.add('hidden');
+    statusEl.classList.remove('hidden');
+    statusEl.textContent = '🟡 连接中...';
+    statusEl.className = 'text-xs font-medium px-2.5 py-1 rounded-full bg-yellow-100 text-yellow-700';
+    restoreBtn.classList.add('hidden');
+  } else if (state === 'disconnected') {
+    headerStatusEl.classList.add('hidden');
+    statusEl.classList.remove('hidden');
+    statusEl.textContent = '🔴 已断开';
+    statusEl.className = 'text-xs font-medium px-2.5 py-1 rounded-full bg-red-100 text-red-700';
+    restoreBtn.classList.remove('hidden');
+  }
+}
+
+// ── Chat ──
+
+function addChatMessage(msg) {
+  const container = document.getElementById('chat-messages');
+  const isFirst = container.querySelector('.text-gray-400') !== null;
+
+  if (isFirst) container.innerHTML = '';
+
+  const msgEl = document.createElement('div');
+  msgEl.className = 'flex items-start gap-2 text-sm';
+  msgEl.innerHTML = `
+    <span class="text-xs text-gray-400 shrink-0 mt-0.5">${msg.time || ''}</span>
+    <span class="font-medium text-gray-600 shrink-0">${msg.from}:</span>
+    <span class="text-gray-700 break-all">${msg.text}</span>
+    <button class="copy-btn shrink-0 text-gray-400 hover:text-gray-600 text-xs px-1" title="复制">📋</button>
+  `;
+
+  const copyBtn = msgEl.querySelector('.copy-btn');
+  copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(msg.text).then(() => {
+      copyBtn.textContent = '✓';
+      setTimeout(() => { copyBtn.textContent = '📋'; }, 1500);
+    }).catch(() => {});
+  });
+
+  container.appendChild(msgEl);
+  container.scrollTop = container.scrollHeight;
+}
+
+document.getElementById('chat-send').addEventListener('click', sendChatMessage);
+document.getElementById('chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendChatMessage();
+});
+
+function sendChatMessage() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+  const now = new Date();
+  const time = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+  ws.send(JSON.stringify({
+    type: 'chat-message',
+    text,
+    from: username,
+    time,
+  }));
+
+  input.value = '';
+}
+
+// ── Restore button ──
+
+document.getElementById('btn-restore').addEventListener('click', () => {
+  if (reconnect) reconnect.cancel();
+  updateConnectionStatus('connecting');
+  connectWebSocket(true);
+});
+
 // ── Leave ──
 
 document.getElementById('btn-leave').addEventListener('click', () => {
+  intentionalLeave = true;
+  if (heartbeat) heartbeat.stop();
+  if (reconnect) reconnect.cancel();
   if (ws) ws.close();
   location.href = '/';
 });

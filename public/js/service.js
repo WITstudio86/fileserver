@@ -7,6 +7,10 @@ let serviceId = null;
 let serviceCode = null;
 let dirHandle = null;
 let files = [];
+let heartbeat = null;
+let reconnect = null;
+let filePollTimer = null;
+let intentionalLeave = false;
 
 // ── State transitions ──
 
@@ -132,20 +136,64 @@ function setupConfigForm() {
 
 // ── WebSocket ──
 
-function connectWebSocket(code) {
+function connectWebSocket(code, isRetry) {
+  if (ws) {
+    try { ws.close(); } catch {}
+  }
+
+  updateConnectionStatus('connecting');
   ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
     ws.send(JSON.stringify({ type: 'register', code: code || '', token }));
+    // Start heartbeat
+    if (heartbeat) heartbeat.stop();
+    heartbeat = createHeartbeat({
+      pingInterval: 15000,
+      timeout: 45000,
+      onPing: () => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ping' }));
+        }
+      },
+      onTimeout: () => {
+        console.log('[Host] heartbeat timeout');
+        if (ws) { try { ws.close(); } catch {} }
+      },
+    });
+    heartbeat.start();
   };
 
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
+    if (msg.type === 'pong') {
+      heartbeat.reset();
+      return;
+    }
     handleMessage(msg);
   };
 
   ws.onclose = () => {
-    showToast('WebSocket 连接已断开', 'error');
+    if (heartbeat) heartbeat.stop();
+    if (filePollTimer) { clearInterval(filePollTimer); filePollTimer = null; }
+
+    if (intentionalLeave) return;
+
+    updateConnectionStatus('disconnected');
+
+    if (reconnect) reconnect.cancel();
+    reconnect = createReconnect({
+      delays: [2000, 4000, 8000],
+      onReconnect: () => {
+        updateConnectionStatus('connecting');
+        connectWebSocket(serviceCode, true);
+      },
+      onFailed: () => {
+        updateConnectionStatus('disconnected');
+        showToast('连接失败，请点击恢复按钮重试', 'error');
+      },
+    });
+    reconnect.start();
   };
 
   ws.onerror = () => {};
@@ -159,8 +207,10 @@ function handleMessage(msg) {
   switch (msg.type) {
     case 'joined':
       serviceId = msg.serviceId;
+      updateConnectionStatus('connected');
       fetchActivityLogs();
       readDirectory();
+      startFilePolling();
       break;
 
     case 'user-joined':
@@ -181,6 +231,10 @@ function handleMessage(msg) {
 
     case 'file-upload':
       handleFileUpload(msg);
+      break;
+
+    case 'chat-message':
+      addChatMessage(msg);
       break;
 
     case 'host-left':
@@ -208,6 +262,7 @@ async function readDirectory() {
         fileId: entry.name,
         name: entry.name,
         size: f.size,
+        lastModified: f.lastModified,
         mime: f.type || 'application/octet-stream',
         handle: entry,
       });
@@ -407,6 +462,179 @@ document.getElementById('btn-close').addEventListener('click', async () => {
 
 document.getElementById('log-filter').addEventListener('change', function () {
   fetchActivityLogs(this.value || null);
+});
+
+// ── Connection status ──
+
+function updateConnectionStatus(state) {
+  const badge = document.getElementById('header-badge');
+  const statusEl = document.getElementById('connection-status');
+  const restoreBtn = document.getElementById('btn-restore');
+
+  if (state === 'connected') {
+    badge.classList.add('hidden');
+    statusEl.classList.remove('hidden');
+    statusEl.textContent = '🟢 已连接';
+    statusEl.className = 'text-xs font-medium px-2.5 py-1 rounded-full bg-green-100 text-green-700';
+    restoreBtn.classList.add('hidden');
+  } else if (state === 'connecting') {
+    badge.classList.add('hidden');
+    statusEl.classList.remove('hidden');
+    statusEl.textContent = '🟡 连接中...';
+    statusEl.className = 'text-xs font-medium px-2.5 py-1 rounded-full bg-yellow-100 text-yellow-700';
+    restoreBtn.classList.add('hidden');
+  } else if (state === 'disconnected') {
+    badge.classList.add('hidden');
+    statusEl.classList.remove('hidden');
+    statusEl.textContent = '🔴 已断开';
+    statusEl.className = 'text-xs font-medium px-2.5 py-1 rounded-full bg-red-100 text-red-700';
+    restoreBtn.classList.remove('hidden');
+  } else {
+    // Other badge states from existing logic
+    statusEl.classList.add('hidden');
+    restoreBtn.classList.add('hidden');
+    badge.classList.remove('hidden');
+  }
+}
+
+// ── File polling ──
+
+function startFilePolling() {
+  if (filePollTimer) return;
+  filePollTimer = setInterval(pollDirectory, 10000);
+}
+
+async function pollDirectory() {
+  if (!dirHandle || !serviceId) return;
+
+  try {
+    // Read current directory state
+    const currentFiles = [];
+    for await (const entry of dirHandle.values()) {
+      if (entry.kind === 'file') {
+        const f = await entry.getFile();
+        currentFiles.push({
+          fileId: entry.name,
+          name: entry.name,
+          size: f.size,
+          lastModified: f.lastModified,
+          mime: f.type || 'application/octet-stream',
+          handle: entry,
+        });
+      }
+    }
+
+    // Build comparable lists
+    const oldMeta = files.map(f => ({ name: f.name, size: f.size, lastModified: f.lastModified || 0 }));
+    const newMeta = currentFiles.map(f => ({ name: f.name, size: f.size, lastModified: f.lastModified }));
+
+    const diff = computeFileDiff(oldMeta, newMeta);
+
+    // Only act if there are changes
+    if (diff.added.length > 0 || diff.removed.length > 0 || diff.modified.length > 0) {
+      // Update file cache
+      files = currentFiles;
+      files.sort((a, b) => a.name.localeCompare(b.name));
+      renderHostFiles();
+
+      // Broadcast new file list
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        broadcastFileList();
+      }
+
+      // Build detailed log message
+      const parts = [];
+      if (diff.added.length) parts.push('新增: ' + diff.added.map(f => f.name).join(', '));
+      if (diff.removed.length) parts.push('删除: ' + diff.removed.map(f => f.name).join(', '));
+      if (diff.modified.length) parts.push('修改: ' + diff.modified.map(f => f.name).join(', '));
+
+      // Log the change
+      try {
+        await api(`/api/logs/${serviceId}`, {
+          method: 'POST',
+          body: JSON.stringify({
+            token,
+            action: 'file-updated',
+            detail: '文件列表已更新：' + parts.join('; '),
+            userName: '系统',
+          }),
+        });
+        fetchActivityLogs(document.getElementById('log-filter').value || null);
+      } catch {}
+    }
+  } catch (e) {
+    console.warn('[Host] file polling error:', e);
+  }
+}
+
+// ── Chat ──
+
+function addChatMessage(msg) {
+  const container = document.getElementById('chat-messages');
+  const isFirst = container.querySelector('.text-gray-400') !== null;
+
+  if (isFirst) container.innerHTML = '';
+
+  const msgEl = document.createElement('div');
+  msgEl.className = 'flex items-start gap-2 text-sm';
+  msgEl.innerHTML = `
+    <span class="text-xs text-gray-400 shrink-0 mt-0.5">${msg.time || ''}</span>
+    <span class="font-medium text-gray-600 shrink-0">${msg.from}:</span>
+    <span class="text-gray-700 break-all">${msg.text}</span>
+    <button class="copy-btn shrink-0 text-gray-400 hover:text-gray-600 text-xs px-1" title="复制">📋</button>
+  `;
+
+  const copyBtn = msgEl.querySelector('.copy-btn');
+  copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(msg.text).then(() => {
+      copyBtn.textContent = '✓';
+      setTimeout(() => { copyBtn.textContent = '📋'; }, 1500);
+    }).catch(() => {});
+  });
+
+  container.appendChild(msgEl);
+  container.scrollTop = container.scrollHeight;
+}
+
+document.getElementById('chat-send').addEventListener('click', sendChatMessage);
+document.getElementById('chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendChatMessage();
+});
+
+function sendChatMessage() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+  const now = new Date();
+  const time = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+  ws.send(JSON.stringify({
+    type: 'chat-message',
+    text,
+    from: '我（主机）',
+    time,
+  }));
+
+  input.value = '';
+}
+
+// ── Restore button ──
+
+document.getElementById('btn-restore').addEventListener('click', () => {
+  if (reconnect) reconnect.cancel();
+  updateConnectionStatus('connecting');
+  connectWebSocket(serviceCode, true);
+});
+
+// ── Intentional close (override) ──
+
+const originalCloseBtn = document.getElementById('btn-close');
+originalCloseBtn.addEventListener('click', () => {
+  intentionalLeave = true;
+  if (heartbeat) heartbeat.stop();
+  if (reconnect) reconnect.cancel();
+  if (filePollTimer) { clearInterval(filePollTimer); filePollTimer = null; }
 });
 
 // Poll activity logs every 10s
