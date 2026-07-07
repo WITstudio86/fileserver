@@ -73,7 +73,13 @@
 
       <!-- File list -->
       <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-        <h3 class="font-semibold text-gray-800 mb-4">📂 共享文件</h3>
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-semibold text-gray-800">📂 共享文件</h3>
+          <div id="folder-nav-area" class="hidden">
+            <button id="btn-refresh-dir" class="text-xs text-gray-400 hover:text-gray-600" title="刷新">🔄</button>
+          </div>
+        </div>
+        <div id="breadcrumb-nav" class="mb-3"></div>
         <div id="join-file-list" class="space-y-1">
           <p class="text-gray-400 text-sm">等待文件列表...</p>
         </div>

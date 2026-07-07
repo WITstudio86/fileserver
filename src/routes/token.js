@@ -45,6 +45,9 @@ module.exports = function tokenRoutes(db) {
       status: token.status,
       serviceId: token.serviceId,
       code: service ? service.code : null,
+      maxUsers: service ? service.maxUsers : null,
+      allowUpload: service ? !!service.allowUpload : null,
+      sharePath: service ? service.sharePath : null,
       expiresAt: token.expiresAt,
     });
   });

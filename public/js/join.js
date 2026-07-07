@@ -6,10 +6,15 @@ let ws = null;
 let serviceId = null;
 let allowUpload = false;
 let files = [];
+let allFolders = [];
+let currentPath = '';  // current navigation path, '' = root
 let username = '';
 let heartbeat = null;
 let reconnect = null;
 let intentionalLeave = false;
+let recoveryPollTimer = null;
+const RECOVERY_POLL_INTERVAL = 3000;
+const RECOVERY_TIMEOUT = 60000;
 
 function showState(name) {
   ['lookup', 'notfound', 'username', 'connected'].forEach(s => {
@@ -120,7 +125,10 @@ function connectWebSocket(isRetry) {
 
   ws.onclose = () => {
     if (heartbeat) heartbeat.stop();
-    if (intentionalLeave) return;
+    if (intentionalLeave) {
+      if (recoveryPollTimer) { clearInterval(recoveryPollTimer); recoveryPollTimer = null; }
+      return;
+    }
 
     const isConnected = !document.getElementById('state-connected').classList.contains('hidden');
 
@@ -132,21 +140,8 @@ function connectWebSocket(isRetry) {
       return;
     }
 
-    updateConnectionStatus('disconnected');
-
-    if (reconnect) reconnect.cancel();
-    reconnect = createReconnect({
-      delays: [2000, 4000, 8000],
-      onReconnect: () => {
-        updateConnectionStatus('connecting');
-        connectWebSocket(true);
-      },
-      onFailed: () => {
-        updateConnectionStatus('disconnected');
-        showToast('连接失败，请点击恢复按钮重试', 'error');
-      },
-    });
-    reconnect.start();
+    updateConnectionStatus('recovering');
+    startRecoveryPolling();
   };
 
   ws.onerror = () => {};
@@ -175,6 +170,7 @@ function handleMessage(msg) {
     case 'file-list':
       console.log('[JOIN] file-list received, count:', (msg.files || []).length);
       files = msg.files || [];
+      allFolders = msg.folders || [];
       renderFiles();
       break;
 
@@ -198,8 +194,9 @@ function handleMessage(msg) {
 
     case 'host-left':
       intentionalLeave = true;
-      showToast('服务已关闭', 'error');
-      setTimeout(() => { location.href = '/'; }, 2000);
+      showToast('主机已断开，正在等待服务恢复...', 'error');
+      updateConnectionStatus('recovering');
+      startRecoveryPolling();
       break;
 
     case 'kicked':
@@ -221,23 +218,116 @@ function handleMessage(msg) {
 
 // ── File list rendering ──
 
-function renderFiles() {
-  const container = document.getElementById('join-file-list');
-  if (!files.length) {
-    container.innerHTML = '<p class="text-gray-400 text-sm">目录为空</p>';
+/**
+ * Get direct child folders of the given path from the allFolders list.
+ * e.g. for path='' with folders=['docs','docs/sub','images'] → ['docs','images']
+ * e.g. for path='docs' with folders=['docs','docs/sub','docs/deep'] → ['docs/sub','docs/deep'] → direct: ['sub','deep']
+ */
+function getChildFolders(parentPath) {
+  const prefix = parentPath ? parentPath + '/' : '';
+  const children = new Set();
+  for (const folder of allFolders) {
+    if (folder === parentPath || !folder.startsWith(prefix)) continue;
+    const relative = folder.substring(prefix.length);
+    const slashIdx = relative.indexOf('/');
+    if (slashIdx === -1) {
+      children.add(relative);
+    } else {
+      children.add(relative.substring(0, slashIdx));
+    }
+  }
+  return [...children].sort((a, b) => a.localeCompare(b));
+}
+
+function navigateTo(targetPath) {
+  currentPath = targetPath;
+  renderFiles();
+}
+
+function renderBreadcrumb() {
+  const bcEl = document.getElementById('breadcrumb-nav');
+  if (!currentPath) {
+    bcEl.innerHTML = '<span class="text-xs text-gray-500 font-medium">📂 根目录</span>';
     return;
   }
-  container.innerHTML = files.map(f => `
-    <div class="flex items-center gap-3 py-2.5 border-b border-gray-50 last:border-0">
-      <span class="text-lg">${(f.mime || '').startsWith('image/') ? '🖼' : '📄'}</span>
-      <span class="flex-1 text-sm text-gray-700 truncate" title="${f.name}">${f.name}</span>
-      <span class="text-xs text-gray-400">${formatSize(f.size)}</span>
-      ${(f.mime || '').startsWith('image/') || f.name.endsWith('.pdf')
-        ? `<button class="btn btn-outline text-xs px-2 py-1 preview-btn" data-fileid="${f.fileId}">预览</button>`
-        : ''}
-      <button class="btn btn-primary text-xs px-2 py-1 download-btn" data-fileid="${f.fileId}">下载</button>
-    </div>
-  `).join('');
+  const parts = currentPath.split('/');
+  let html = '<span class="text-xs text-gray-400 cursor-pointer hover:text-blue-600 breadcrumb-link" data-path="">📂 根目录</span>';
+  let accumulated = '';
+  for (const part of parts) {
+    accumulated = accumulated ? `${accumulated}/${part}` : part;
+    html += ` <span class="text-xs text-gray-300">/</span> <span class="text-xs text-gray-500 font-medium cursor-pointer hover:text-blue-600 breadcrumb-link" data-path="${accumulated}">${part}</span>`;
+  }
+  bcEl.innerHTML = html;
+
+  // Attach click handlers
+  bcEl.querySelectorAll('.breadcrumb-link').forEach(el => {
+    el.addEventListener('click', () => navigateTo(el.dataset.path));
+  });
+}
+
+function renderFiles() {
+  const container = document.getElementById('join-file-list');
+  const navArea = document.getElementById('folder-nav-area');
+
+  // Update breadcrumb
+  renderBreadcrumb();
+
+  // Get files in current path and child folders
+  const pathFiles = files.filter(f => f.fileId.lastIndexOf('/') === -1
+    ? currentPath === ''
+    : f.fileId.substring(0, f.fileId.lastIndexOf('/')) === currentPath);
+  const childFolders = getChildFolders(currentPath);
+
+  // Show/hide navigation area
+  if (currentPath || childFolders.length > 0) {
+    navArea.classList.remove('hidden');
+  }
+
+  if (!pathFiles.length && !childFolders.length) {
+    container.innerHTML = '<p class="text-gray-400 text-sm">此文件夹为空</p>';
+    return;
+  }
+
+  let html = '';
+
+  // ".." back to parent
+  if (currentPath) {
+    const parentPath = currentPath.includes('/')
+      ? currentPath.substring(0, currentPath.lastIndexOf('/'))
+      : '';
+    html += `<div class="flex items-center gap-3 py-2.5 border-b border-gray-100 cursor-pointer hover:bg-gray-50 rounded folder-entry" data-path="${parentPath}">
+      <span class="text-lg">📁</span>
+      <span class="flex-1 text-sm text-blue-600 font-medium">..</span>
+      <span class="text-xs text-gray-400">返回上级</span>
+    </div>`;
+  }
+
+  // Child folders
+  for (const folderName of childFolders) {
+    const fullPath = currentPath ? `${currentPath}/${folderName}` : folderName;
+    const fileCount = files.filter(f => {
+      const lastSlash = f.fileId.lastIndexOf('/');
+      const fp = lastSlash === -1 ? '' : f.fileId.substring(0, lastSlash);
+      return fp === fullPath || fp.startsWith(fullPath + '/');
+    }).length;
+    html += `<div class="flex items-center gap-3 py-2.5 border-b border-gray-100 cursor-pointer hover:bg-blue-50 rounded folder-entry" data-path="${fullPath}">
+      <span class="text-lg">📁</span>
+      <span class="flex-1 text-sm text-gray-700 font-medium">${folderName}/</span>
+      <span class="text-xs text-gray-400">${fileCount} 个文件</span>
+    </div>`;
+  }
+
+  // Files in current path
+  for (const f of pathFiles) {
+    html += joinFileRowHtml(f);
+  }
+
+  container.innerHTML = html;
+
+  // Attach folder click handlers
+  container.querySelectorAll('.folder-entry').forEach(el => {
+    el.addEventListener('click', () => navigateTo(el.dataset.path));
+  });
 
   // Attach download handlers
   container.querySelectorAll('.download-btn').forEach(btn => {
@@ -248,6 +338,18 @@ function renderFiles() {
   container.querySelectorAll('.preview-btn').forEach(btn => {
     btn.addEventListener('click', () => previewFile(btn.dataset.fileid));
   });
+}
+
+function joinFileRowHtml(f) {
+  return `<div class="flex items-center gap-3 py-2.5 border-b border-gray-50 last:border-0">
+    <span class="text-lg">${(f.mime || '').startsWith('image/') ? '🖼' : '📄'}</span>
+    <span class="flex-1 text-sm text-gray-700 truncate" title="${f.fileId}">${f.name}</span>
+    <span class="text-xs text-gray-400">${formatSize(f.size)}</span>
+    ${(f.mime || '').startsWith('image/') || f.name.endsWith('.pdf')
+      ? `<button class="btn btn-outline text-xs px-2 py-1 preview-btn" data-fileid="${f.fileId}">预览</button>`
+      : ''}
+    <button class="btn btn-primary text-xs px-2 py-1 download-btn" data-fileid="${f.fileId}">下载</button>
+  </div>`;
 }
 
 // ── File download ──
@@ -355,13 +457,14 @@ function setupUpload() {
     const reader = new FileReader();
     reader.onload = () => {
       const base64 = arrayBufferToBase64(reader.result);
-      console.log('[JOIN] sending file-upload:', { name: selectedFile.name, mime: selectedFile.type, dataLen: base64.length });
+      console.log('[JOIN] sending file-upload:', { name: selectedFile.name, mime: selectedFile.type, dataLen: base64.length, path: currentPath });
       ws.send(JSON.stringify({
         type: 'file-upload',
         name: selectedFile.name,
         mime: selectedFile.type || 'application/octet-stream',
         data: base64,
         userName: username,
+        path: currentPath || '',
       }));
       showToast(`正在上传 ${selectedFile.name}...`, 'success');
       document.getElementById('upload-name').classList.add('hidden');
@@ -391,6 +494,12 @@ function updateConnectionStatus(state) {
     statusEl.classList.remove('hidden');
     statusEl.textContent = '🟡 连接中...';
     statusEl.className = 'text-xs font-medium px-2.5 py-1 rounded-full bg-yellow-100 text-yellow-700';
+    restoreBtn.classList.add('hidden');
+  } else if (state === 'recovering') {
+    headerStatusEl.classList.add('hidden');
+    statusEl.classList.remove('hidden');
+    statusEl.textContent = '🔄 等待主机恢复...';
+    statusEl.className = 'text-xs font-medium px-2.5 py-1 rounded-full bg-blue-100 text-blue-700';
     restoreBtn.classList.add('hidden');
   } else if (state === 'disconnected') {
     headerStatusEl.classList.add('hidden');
@@ -453,12 +562,50 @@ function sendChatMessage() {
   input.value = '';
 }
 
+// ── Service recovery polling ──
+
+function startRecoveryPolling() {
+  if (recoveryPollTimer) clearInterval(recoveryPollTimer);
+
+  const startTime = Date.now();
+  let attemptCount = 0;
+
+  recoveryPollTimer = setInterval(async () => {
+    attemptCount++;
+    const elapsed = Date.now() - startTime;
+
+    if (elapsed > RECOVERY_TIMEOUT) {
+      clearInterval(recoveryPollTimer);
+      recoveryPollTimer = null;
+      updateConnectionStatus('disconnected');
+      showToast('服务未恢复，请稍后重试', 'error');
+      return;
+    }
+
+    try {
+      const data = await api(`/api/service/${code}`);
+      if (data.found) {
+        // Service is back! Rejoin
+        clearInterval(recoveryPollTimer);
+        recoveryPollTimer = null;
+        console.log('[JOIN] Service recovered, rejoining...');
+        updateConnectionStatus('connecting');
+        connectWebSocket(true);
+      } else {
+        console.log(`[JOIN] Recovery poll attempt ${attemptCount} — service not found yet`);
+      }
+    } catch {
+      console.warn(`[JOIN] Recovery poll attempt ${attemptCount} — network error`);
+    }
+  }, RECOVERY_POLL_INTERVAL);
+}
+
 // ── Restore button ──
 
 document.getElementById('btn-restore').addEventListener('click', () => {
-  if (reconnect) reconnect.cancel();
-  updateConnectionStatus('connecting');
-  connectWebSocket(true);
+  if (recoveryPollTimer) { clearInterval(recoveryPollTimer); recoveryPollTimer = null; }
+  updateConnectionStatus('recovering');
+  startRecoveryPolling();
 });
 
 // ── Leave ──
@@ -467,6 +614,7 @@ document.getElementById('btn-leave').addEventListener('click', () => {
   intentionalLeave = true;
   if (heartbeat) heartbeat.stop();
   if (reconnect) reconnect.cancel();
+  if (recoveryPollTimer) { clearInterval(recoveryPollTimer); recoveryPollTimer = null; }
   if (ws) ws.close();
   location.href = '/';
 });

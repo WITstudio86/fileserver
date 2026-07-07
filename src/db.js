@@ -127,6 +127,11 @@ function closeService(db, tokenId) {
   saveDb(db);
 }
 
+function closeServiceByCode(db, code) {
+  db.run("UPDATE services SET status = 'closed' WHERE code = ? AND status IN ('configuring', 'active')", [code]);
+  saveDb(db);
+}
+
 function getServiceByToken(db, tokenId) {
   const rows = db.exec('SELECT id, code, status, share_path, max_users, allow_upload, current_users FROM services WHERE token_id = ?', [tokenId]);
   if (!rows.length || !rows[0].values.length) return null;
@@ -145,10 +150,10 @@ function getServiceByCode(db, code) {
 }
 
 function getServiceById(db, serviceId) {
-  const rows = db.exec('SELECT id, token_id, code, status, current_users FROM services WHERE id = ?', [serviceId]);
+  const rows = db.exec('SELECT id, token_id, code, status, current_users, max_users, allow_upload, share_path FROM services WHERE id = ?', [serviceId]);
   if (!rows.length || !rows[0].values.length) return null;
-  const [id, tokenId, code, status, currentUsers] = rows[0].values[0];
-  return { id, tokenId, code, status, currentUsers };
+  const [id, tokenId, code, status, currentUsers, maxUsers, allowUpload, sharePath] = rows[0].values[0];
+  return { id, tokenId, code, status, currentUsers, maxUsers, allowUpload, sharePath };
 }
 
 function checkCodeExists(db, code) {
@@ -212,6 +217,7 @@ module.exports = {
   createService,
   startService,
   closeService,
+  closeServiceByCode,
   getServiceByToken,
   getServiceByCode,
   getServiceById,

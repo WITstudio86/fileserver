@@ -2,9 +2,11 @@ const { v4: uuidv4 } = require('uuid');
 const {
   getToken,
   markTokenUsed,
+  createToken,
   createService,
   startService,
   closeService,
+  closeServiceByCode,
   getServiceByToken,
   getServiceByCode,
   checkCodeExists,
@@ -79,6 +81,31 @@ module.exports = function serviceRoutes(db) {
 
     closeService(db, token);
     res.json({ success: true });
+  });
+
+  // POST /api/service/recover
+  // Re-register a service using the same code and sharePath (used when host recovers from disconnect)
+  router.post('/recover', (req, res) => {
+    const { code, maxUsers, allowUpload, sharePath } = req.body;
+
+    if (!code || !/^\d{4}$/.test(code)) {
+      return res.status(400).json({ error: '加入码必须是 4 位数字' });
+    }
+
+    // Close any existing active/configuring service with this code
+    closeServiceByCode(db, code);
+
+    // Create new token and service
+    const newToken = uuidv4();
+    const serviceId = uuidv4();
+    const expiresAt = new Date(Date.now() + 12 * 3600 * 1000).toISOString();
+
+    createToken(db, newToken, expiresAt);
+    createService(db, serviceId, newToken, code, maxUsers || 10, !!allowUpload, sharePath || '');
+    markTokenUsed(db, newToken, serviceId);
+    startService(db, newToken);
+
+    res.json({ token: newToken, serviceId, code });
   });
 
   // GET /api/service/:code
