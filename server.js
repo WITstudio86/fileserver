@@ -3,7 +3,7 @@ const http = require('http');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 const { initDb } = require('./src/db');
-const { setupWebSocket } = require('./src/ws-handler');
+const { setupWebSocket, downloadBuffers } = require('./src/ws-handler');
 const tokenRoutes = require('./src/routes/token');
 const serviceRoutes = require('./src/routes/service');
 const logsRoutes = require('./src/routes/logs');
@@ -24,6 +24,40 @@ async function main() {
   app.use('/api/token', tokenRoutes(db));
   app.use('/api/service', serviceRoutes(db));
   app.use('/api/logs', logsRoutes(db));
+
+  // File download endpoint (serves buffered chunks from host)
+  app.get('/api/dl/:downloadId', (req, res) => {
+    const buf = downloadBuffers.get(req.params.downloadId);
+    if (!buf || buf.received < buf.totalChunks) {
+      return res.status(404).send('File not found or not ready');
+    }
+    // Prevent multiple downloads / cleanup issues
+    downloadBuffers.delete(req.params.downloadId);
+    clearTimeout(buf.timer);
+
+    const total = buf.totalSize;
+    res.setHeader('Content-Type', buf.mime || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(buf.name)}`);
+    res.setHeader('Content-Length', total);
+
+    // Disable timeout for large file downloads
+    req.setTimeout(0);
+    res.setTimeout(0);
+
+    // Stream chunks to avoid double-buffering in memory
+    let sent = 0;
+    for (const chunk of buf.chunks) {
+      sent += chunk.length;
+      if (sent >= total) {
+        const excess = sent - total;
+        res.write(excess > 0 ? chunk.subarray(0, chunk.length - excess) : chunk);
+      } else {
+        res.write(chunk);
+      }
+    }
+    res.end();
+    console.log(`[HTTP] download served: ${buf.name} (${(total / 1024 / 1024).toFixed(1)}MB)`);
+  });
 
   // Page routes
   app.get('/service', (_req, res) => {

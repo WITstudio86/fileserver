@@ -488,6 +488,9 @@ async function resolveFileHandle(fileId) {
   }
 }
 
+const CHUNK_SIZE = 512 * 1024;        // 512KB for files ≤ 50MB
+const CHUNK_SIZE_LARGE = 1024 * 1024; // 1MB for files > 50MB
+
 async function handleFileRequest(msg) {
   const resolved = await resolveFileHandle(msg.fileId);
   if (!resolved || !ws) return;
@@ -495,17 +498,80 @@ async function handleFileRequest(msg) {
   try {
     const data = await resolved.handle.getFile();
     const buffer = await data.arrayBuffer();
-    const base64 = arrayBufferToBase64(buffer);
-    if (ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({
-      type: 'file-response',
-      fileId: msg.fileId,
-      name: resolved.file ? resolved.file.name : msg.fileId.split('/').pop(),
-      mime: resolved.file ? resolved.file.mime : (data.type || 'application/octet-stream'),
-      data: base64,
-    }));
+    const fileName = resolved.file ? resolved.file.name : msg.fileId.split('/').pop();
+    const mimeType = resolved.file ? resolved.file.mime : (data.type || 'application/octet-stream');
+    const fileSize = buffer.byteLength;
+
+    // Use larger chunks for big files to reduce message count
+    const chunkSize = fileSize > 50 * 1024 * 1024 ? CHUNK_SIZE_LARGE : CHUNK_SIZE;
+
+    if (fileSize <= chunkSize) {
+      // Small file: send directly in one message
+      const base64 = arrayBufferToBase64(buffer);
+      if (ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({
+        type: 'file-response',
+        fileId: msg.fileId,
+        name: fileName,
+        mime: mimeType,
+        data: base64,
+      }));
+    } else {
+      // Large file: chunked transfer via server buffer → HTTP download
+      const downloadId = crypto.randomUUID();
+      const totalChunks = Math.ceil(fileSize / chunkSize);
+      const bufferLimit = chunkSize * 8; // flow control: max ~8 chunks buffered
+
+      console.log(`[Host] chunked send: ${fileName} (${formatSize(fileSize)}, ${totalChunks} chunks of ${formatSize(chunkSize)})`);
+
+      ws.send(JSON.stringify({
+        type: 'file-response-start',
+        requestId: msg.requestId || '',
+        downloadId,
+        fileId: msg.fileId,
+        name: fileName,
+        mime: mimeType,
+        totalChunks,
+        totalSize: fileSize,
+      }));
+
+      for (let i = 0; i < totalChunks; i++) {
+        // Flow control: wait if WebSocket send buffer is too full
+        while (ws.bufferedAmount > bufferLimit) {
+          await new Promise(r => setTimeout(r, 100));
+        }
+        if (ws.readyState !== WebSocket.OPEN) return;
+
+        const start = i * chunkSize;
+        const end = Math.min(start + chunkSize, fileSize);
+        const chunk = buffer.slice(start, end);
+        const base64 = arrayBufferToBase64(chunk);
+
+        ws.send(JSON.stringify({
+          type: 'file-chunk',
+          downloadId,
+          chunkIndex: i,
+          data: base64,
+        }));
+
+        // Yield to event loop periodically to prevent blocking UI
+        if (i % 5 === 4) {
+          await new Promise(r => setTimeout(r, 0));
+        }
+      }
+      console.log(`[Host] chunked send complete: ${fileName}`);
+    }
   } catch (e) {
-    console.error('File read error:', e);
+    console.error('[Host] File read error:', e);
+    // Notify joiner that file transfer failed
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'upload-error',
+        name: msg.fileId,
+        userName: msg.userName || '',
+        message: `文件读取失败: ${e.message}`,
+      }));
+    }
   }
 }
 

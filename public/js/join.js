@@ -16,6 +16,11 @@ let recoveryPollTimer = null;
 const RECOVERY_POLL_INTERVAL = 3000;
 const RECOVERY_TIMEOUT = 60000;
 
+// Download state: tracks in-progress downloads
+let activeDownload = null;     // { downloadId, name, size, totalChunks }
+let pendingPreview = null;     // { fileId, downloadId, type: 'image'|'pdf' } — set by previewFile
+let previewOverridden = false; // true when showDownloadReady is temporarily overridden
+
 function showState(name) {
   ['lookup', 'notfound', 'username', 'connected'].forEach(s => {
     document.getElementById(`state-${s}`).classList.toggle('hidden', s !== name);
@@ -125,6 +130,9 @@ function connectWebSocket(isRetry) {
 
   ws.onclose = () => {
     if (heartbeat) heartbeat.stop();
+    // Clean up active download UI
+    activeDownload = null;
+    document.getElementById('download-progress-area').classList.add('hidden');
     if (intentionalLeave) {
       if (recoveryPollTimer) { clearInterval(recoveryPollTimer); recoveryPollTimer = null; }
       return;
@@ -174,8 +182,22 @@ function handleMessage(msg) {
       renderFiles();
       break;
 
+    case 'download-progress':
+      // Server → Joiner: chunk transfer progress update
+      updateDownloadProgress(msg);
+      break;
+
+    case 'download-ready':
+      // Server → Joiner: file is ready for HTTP download
+      showDownloadReady(msg);
+      break;
+
     case 'file-response':
-      handleFileResponse(msg);
+      // Small file: direct transfer (backward compatible, server passes through)
+      (() => {
+        const blob = new Blob([base64ToArrayBuffer(msg.data)], { type: msg.mime });
+        triggerDownload(blob, msg.name);
+      })();
       break;
 
     case 'upload-error':
@@ -355,21 +377,100 @@ function joinFileRowHtml(f) {
 // ── File download ──
 
 function requestFile(fileId) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type: 'file-request', fileId, userName: username }));
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    showToast('连接已断开，请刷新页面重试', 'error');
+    return;
+  }
+  // Show immediate feedback
+  const file = files.find(f => f.fileId === fileId);
+  const area = document.getElementById('download-progress-area');
+  const nameEl = document.getElementById('dl-progress-name');
+  const textEl = document.getElementById('dl-progress-text');
+  const bar = document.getElementById('dl-progress-bar');
+  const link = document.getElementById('dl-ready-link');
+  area.classList.remove('hidden');
+  link.classList.add('hidden');
+  bar.style.width = '0%';
+  bar.className = 'bg-blue-500 h-2.5 rounded-full';
+  nameEl.textContent = '📥 ' + (file ? file.name : fileId);
+  textEl.textContent = '正在请求文件...';
+  console.log('[JOIN] requesting file:', fileId);
+  ws.send(JSON.stringify({ type: 'file-request', fileId, requestId: crypto.randomUUID(), userName: username }));
 }
 
-function handleFileResponse(msg) {
-  const blob = new Blob([base64ToArrayBuffer(msg.data)], { type: msg.mime });
+function triggerDownload(blob, name) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = msg.name;
+  a.download = name;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  showToast(`已下载 ${msg.name}`, 'success');
+  showToast(`已下载 ${name}`, 'success');
+}
+
+// ── Download progress (server-buffered HTTP download) ──
+
+function updateDownloadProgress(msg) {
+  // Don't show progress area during preview (modal has its own spinner)
+  if (pendingPreview) return;
+
+  const area = document.getElementById('download-progress-area');
+  const nameEl = document.getElementById('dl-progress-name');
+  const textEl = document.getElementById('dl-progress-text');
+  const bar = document.getElementById('dl-progress-bar');
+  const link = document.getElementById('dl-ready-link');
+
+  area.classList.remove('hidden');
+  link.classList.add('hidden');
+
+  activeDownload = { downloadId: msg.downloadId, name: msg.name, size: msg.size, totalChunks: msg.total };
+
+  const pct = msg.total > 0 ? Math.round((msg.received / msg.total) * 100) : 0;
+  nameEl.textContent = '📥 ' + msg.name;
+  textEl.textContent = `传输中 ${msg.received}/${msg.total} 块 · ${pct}%`;
+  bar.style.width = pct + '%';
+  bar.className = 'bg-blue-500 h-2.5 rounded-full transition-all duration-300';
+}
+
+function showDownloadReady(msg) {
+  // If a preview is pending for this download, handle it first
+  if (pendingPreview) {
+    if (pendingPreview.type === 'image') {
+      const content = document.getElementById('preview-content');
+      const img = new Image();
+      img.src = `/api/dl/${encodeURIComponent(msg.downloadId)}`;
+      img.className = 'max-w-full max-h-[70vh] rounded';
+      img.onload = () => { content.innerHTML = ''; content.appendChild(img); };
+      img.onerror = () => { content.innerHTML = '<p class="text-red-500">预览加载失败</p>'; };
+    } else if (pendingPreview.type === 'pdf') {
+      const content = document.getElementById('preview-content');
+      content.innerHTML = `<iframe src="/api/dl/${encodeURIComponent(msg.downloadId)}" class="w-full h-[70vh] rounded"></iframe>`;
+    }
+    pendingPreview = null;
+    document.getElementById('download-progress-area').classList.add('hidden');
+    activeDownload = null;
+    return;
+  }
+
+  // Normal download flow: show download button
+  const area = document.getElementById('download-progress-area');
+  const nameEl = document.getElementById('dl-progress-name');
+  const textEl = document.getElementById('dl-progress-text');
+  const bar = document.getElementById('dl-progress-bar');
+  const link = document.getElementById('dl-ready-link');
+
+  area.classList.remove('hidden');
+  bar.style.width = '100%';
+  bar.className = 'bg-green-500 h-2.5 rounded-full transition-all duration-300';
+  nameEl.textContent = '✅ ' + msg.name;
+  textEl.textContent = `${formatSize(msg.size)} — 点击下方按钮下载`;
+  link.href = `/api/dl/${encodeURIComponent(msg.downloadId)}`;
+  link.classList.remove('hidden');
+  link.textContent = `⬇ 下载 ${msg.name} (${formatSize(msg.size)})`;
+
+  activeDownload = null;
 }
 
 // ── File preview ──
@@ -380,38 +481,16 @@ function previewFile(fileId) {
 
   const modal = document.getElementById('preview-modal');
   const content = document.getElementById('preview-content');
-
   modal.classList.remove('hidden');
 
   if ((file.mime || '').startsWith('image/')) {
-    content.innerHTML = `<div class="text-center text-gray-400 py-10">点击"下载"以预览图片</div>`;
-    // For images we request the actual file data
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'file-request', fileId, userName: username }));
-      // Temporarily override handleFileResponse for preview
-      const origHandler = handleFileResponse;
-      handleFileResponse = function (msg) {
-        if (msg.fileId === fileId) {
-          const blob = new Blob([base64ToArrayBuffer(msg.data)], { type: msg.mime });
-          const url = URL.createObjectURL(blob);
-          content.innerHTML = `<img src="${url}" alt="${msg.name}" class="max-w-full max-h-[70vh] rounded">`;
-        }
-        handleFileResponse = origHandler;
-      };
-    }
+    content.innerHTML = `<div class="text-center text-gray-400 py-10"><div class="spinner mx-auto mb-3"></div>加载预览中...</div>`;
+    pendingPreview = { fileId, type: 'image' };
+    requestFile(fileId);
   } else if (file.name.endsWith('.pdf')) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'file-request', fileId, userName: username }));
-      const origHandler = handleFileResponse;
-      handleFileResponse = function (msg) {
-        if (msg.fileId === fileId) {
-          const blob = new Blob([base64ToArrayBuffer(msg.data)], { type: msg.mime });
-          const url = URL.createObjectURL(blob);
-          content.innerHTML = `<iframe src="${url}" class="w-full h-[70vh] rounded"></iframe>`;
-        }
-        handleFileResponse = origHandler;
-      };
-    }
+    content.innerHTML = `<div class="text-center text-gray-400 py-10"><div class="spinner mx-auto mb-3"></div>加载预览中...</div>`;
+    pendingPreview = { fileId, type: 'pdf' };
+    requestFile(fileId);
   } else {
     content.innerHTML = '<p class="text-gray-500">此文件类型不支持预览</p>';
   }
@@ -420,6 +499,7 @@ function previewFile(fileId) {
 document.getElementById('preview-close').addEventListener('click', () => {
   document.getElementById('preview-modal').classList.add('hidden');
   document.getElementById('preview-content').innerHTML = '';
+  pendingPreview = null; // Cancel any pending preview
 });
 
 // ── File upload ──
